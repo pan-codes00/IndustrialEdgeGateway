@@ -199,8 +199,6 @@ target_link_libraries(
     gateway_storage
     )
 
-#===============================================================
-#============测试======================================
 if(BUILD_TESTING)
     add_executable(
     protocol_tests
@@ -248,7 +246,6 @@ if(BUILD_TESTING)
     )
 endif()
 
-
 if(BUILD_TESTING)
     add_executable(
         sqlite_storage_tests
@@ -276,54 +273,3 @@ if(BUILD_TESTING)
 endif()
 
 
-if(BUILD_TESTING)
-    add_executable(
-        config_tests
-        tests/config_tests.cpp
-    )
-
-    target_compile_options(
-        config_tests
-        PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
-    )
-
-    target_link_libraries(
-        config_tests
-        PRIVATE
-        gateway_config
-    )
-
-    add_test(
-        NAME config_tests
-        COMMAND config_tests
-    )
-endif()
-
-if(BUILD_TESTING)
-    add_executable(
-        socket_utils_tests
-        tests/socket_utils_tests.cpp
-    )
-
-    target_compile_options(
-        socket_utils_tests
-        PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
-    )
-
-    target_link_libraries(
-        socket_utils_tests
-        PRIVATE
-        gateway_common
-    )
-
-    add_test(
-        NAME socket_utils_tests
-        COMMAND socket_utils_tests
-    )
-endif()

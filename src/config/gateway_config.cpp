@@ -59,6 +59,9 @@ bool loadGatewayConfig(
         <<"配置文件打开成功: "
         <<configPath
         <<'\n';
+    
+    //先修改临时脚本
+    GatewayConfig newConfig = config;
 
     std::string line;
     std::size_t lineNumber = 0;
@@ -119,10 +122,10 @@ bool loadGatewayConfig(
                 return false;
             }
             //检查通过后，保存到配置结构体
-            config.port = static_cast<std::uint16_t>(portNumber);
+            newConfig.port = static_cast<std::uint16_t>(portNumber);
             std::cout
                 <<"端口号: "
-                <<config.port
+                <<newConfig.port
                 <<" \n";
             continue;
         }
@@ -138,10 +141,10 @@ bool loadGatewayConfig(
                     <<" 行超时时间不是有效的正整数\n";
                 return false;
             }
-            config.timeoutSeconds = timeoutNumber;
+            newConfig.timeoutSeconds = timeoutNumber;
             std::cout
                 <<"设备超时时间: "
-                <<config.timeoutSeconds
+                <<newConfig.timeoutSeconds
                 <<" 秒\n";
             continue;
         }
@@ -149,10 +152,10 @@ bool loadGatewayConfig(
         //解析路径===============================================================
         if(key == "database_path"){
             //数据库路径是字符串，不需要转换成数字
-            config.databasePath = value;
+            newConfig.databasePath = value;
             std::cout
                 <<"数据库路径: "
-                <<config.databasePath
+                <<newConfig.databasePath
                 <<"\n";
             continue;
         }
@@ -168,20 +171,20 @@ bool loadGatewayConfig(
                     <<" 行缓冲区大小不是有效的正整数\n";
                 return false;
             }
-            config.maxPendingBufferSize = bufferSize;
+            newConfig.maxPendingBufferSize = bufferSize;
             std::cout
                 <<"最大接收缓冲区: "
-                <<config.maxPendingBufferSize
+                <<newConfig.maxPendingBufferSize
                 <<" \n";
             continue;
         }
         //解析日志路径==================================
         if(key == "log_path"){
-            config.logPath = value;
+            newConfig.logPath = value;
             
             std::cout
                 <<"日志路径: "
-                <<config.logPath
+                <<newConfig.logPath
                 <<'\n';
             continue;
         }
@@ -193,8 +196,9 @@ bool loadGatewayConfig(
             <<" 行存在未知配置项\n";
         return false;
 
-
     }
+    config=newConfig;
+
     std::cout<<"配置文件读取完成\n";
     return true;
 

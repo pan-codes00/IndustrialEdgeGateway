@@ -20,6 +20,8 @@
 #include <signal.h>
 #include <sys/time.h>
 #include <vector>
+#include <atomic>
+#include <memory>
 
 namespace {
 
@@ -36,7 +38,8 @@ std::string makeSystemErrorMessage(const std::string& operation)
         ",message"+
         error.message();
 }
-
+//========================================================
+//信号处理函数
 volatile sig_atomic_t stopRequested =0;
 
 void handleStopSignal(int)
@@ -44,10 +47,32 @@ void handleStopSignal(int)
     //信号处理函数只修改标志，不输出日志
     stopRequested =1;
 }
+//客户端线程和运行结束工作状态结构体
+struct ClientWorker{
+    std::thread thread;
+    std::shared_ptr<std::atomic_bool> finished;
+};
+//删除已完成的工作线程============================================
+void removeFinishedClientWorkers(std::vector<ClientWorker>& workers)
+{
+    auto it = workers.begin();
+
+    while(it != workers.end()){
+        if(!it->finished->load()){
+            ++it;
+            continue;
+        }
+        if(it->thread.joinable()){
+            it->thread.join();
+        }
+        it = workers.erase(it);
+    }
+}
 
 }
 
 //检测设备是否离线函数=====================================
+//监控线程
 void monitorDeviceStatus(
         gateway::DeviceRegistry& registry,
         std::size_t timeoutSeconds)
@@ -63,6 +88,7 @@ void monitorDeviceStatus(
     }
 }
 //对客户操作函数====================================================
+//处理客户端线程
 void handleClient(
     int clientFd,
     std::uint64_t sessionId,
@@ -84,6 +110,7 @@ void handleClient(
             sizeof(buffer)-1,
             0
                 );
+        //判断正常接收数据=============================================
         if(receivedBytes > 0){
             buffer[receivedBytes] = '\0';
             //按实际收到的字节数追加，不能依赖字符串结束符
@@ -105,9 +132,11 @@ void handleClient(
                 break;
             }
             std::size_t newlinePosition;
+            //循环解析信息保存到设备
             while((newlinePosition 
                         = pendingBuffer.find('\n'))
-                    != std::string::npos){
+                    != std::string::npos)
+            {
                 std::string completeMessage=
                     pendingBuffer.substr(0,newlinePosition);
 
@@ -132,7 +161,7 @@ void handleClient(
                     continue;
                 }
                 //解析成功后
-                //第一次收到数据时绑定设备ID,一台客户端只能代表一台设备
+                //第一次收到数据时绑定设备ID,一台客户端只能代表一台设备,不能随意换ID
                 if(connectDeviceId.empty()){
                     connectDeviceId = data.deviceId;
                 }
@@ -160,7 +189,8 @@ void handleClient(
                 const gateway::UpdateResult updateResult=
                     registry.update(data,sessionId);
                 if(updateResult == gateway::UpdateResult::ReplacedByNewerSession){
-                    //拒绝已经失效的旧连接
+                    //防止掉线重新连接不上，拒绝已经失效的旧连接
+                    //忽略旧会话
                     logger.warning(
                             "旧会话退出，无法修改设备状态，sessionId=" +
                             std::to_string(sessionId));
@@ -219,6 +249,7 @@ void handleClient(
             //recv被信号临时中断
             continue;
         }
+        //暂时没有数据或超时
         else if(errno == EAGAIN || errno == EWOULDBLOCK){
             continue;
         }
@@ -248,13 +279,25 @@ void handleClient(
     close(clientFd);
 }
 //主函数=================================================================================================
-int main()
+int main(int argc,char* argv[])
 {
+    std::string configPath = "config/gateway.conf";
+    if(argc > 2){
+        std::cerr
+            <<"用法："
+            <<argv[0]
+            << " [配置文件路径]\n";
+        return 1;
+    }
+    if(argc == 2){
+        configPath = argv[1];
+    }
+
     //读取文件配置,加载配置==============================================
     config::GatewayConfig gatewayConfig;
 
     if(!config::loadGatewayConfig(
-        "config/gateway.conf",
+        configPath,
         gatewayConfig)){
         std::cerr <<"网关配置加载失败，服务器退出\n";
         return 1;
@@ -350,6 +393,22 @@ int main()
         close(listenFd);
         return 1;
     }
+    //设置监听超时，防止accept一直阻塞
+    timeval acceptTimeout{};
+    acceptTimeout.tv_sec =1;
+    acceptTimeout.tv_usec =0;
+    if(setsockopt(
+                listenFd,
+                SOL_SOCKET,
+                SO_RCVTIMEO,
+                &acceptTimeout,
+                sizeof(acceptTimeout)) == -1){
+        logger.error(
+                makeSystemErrorMessage("setsockopt监听超时"));
+
+        close(listenFd);
+        return 1;
+    }
 
 //======================================================================================
     //服务端启动时初始化数据库
@@ -368,10 +427,10 @@ int main()
         "，等待客户端连接...");
 
     //5.接受一个客户端连接
-    //创建设备注册表，互斥锁由内部管理
+    //创建设备注册表类对象，互斥锁由内部管理
     gateway::DeviceRegistry registry;
     std::uint64_t nextSessionId = 1;
-    std::vector<std::thread> clientThreads;
+    std::vector<ClientWorker> ClientWorkers;
     //创建后台线程监测设备状态
     std::thread monitorThread(
         monitorDeviceStatus,
@@ -380,6 +439,9 @@ int main()
     
     //循环接收客户端连接
     while(!stopRequested){
+        //即使暂时没有新连接，也能定期回收已结束线程
+        removeFinishedClientWorkers(ClientWorkers);
+
         sockaddr_in clientAddr{};
         socklen_t clientAddrLen = sizeof(clientAddr);
 
@@ -389,19 +451,35 @@ int main()
             &clientAddrLen
                 );
         if(clientFd==-1){
+            //被临时信号中断
             if(errno == EINTR){
-                break;
+                if(stopRequested){
+                    break;
+                }
+                continue;
             }
+            //1秒内没有新连接，属于正常超时
+            if(errno == EAGAIN || errno == EWOULDBLOCK){
+                continue;
+            }
+
             logger.error(makeSystemErrorMessage("accept"));
             continue;
         }
+        //accept成功同时可能刚好收到停止信号
+        if(stopRequested){
+            close(clientFd);
+            break;
+        }
+        
         //生成会话id
         const std::uint64_t sessionId = nextSessionId++;
         //连接日志
         logger.info( "客户端连接成功，sessionId="
                 +std::to_string(sessionId));
         
-        //给每个客户端设置1秒接收超时
+        //给每个客户端设置1秒接收超时===
+        //防止客户端一直占用线程
         timeval receiveTimeout{};
         receiveTimeout.tv_sec =1;
         receiveTimeout.tv_usec =0;
@@ -419,14 +497,31 @@ int main()
         }
 
         //操作客户端线程
-        clientThreads.emplace_back(
-            handleClient,
-            clientFd,
-            sessionId,
-            std::ref(registry),
-            std::ref(telemetryStorage),
-            std::ref(logger),
-            gatewayConfig.maxPendingBufferSize);
+        auto finished = std::make_shared<std::atomic_bool>(false);//原子数据保护线程结束状态
+
+        //将线程和它的结束状态打包进容器，方便后续管理
+        ClientWorkers.push_back(ClientWorker{
+            std::thread(
+                [clientFd,
+                sessionId,
+                &registry,
+                &telemetryStorage,
+                &logger,
+                maxPendingBufferSize = gatewayConfig.maxPendingBufferSize,
+                finished]()
+                {
+                    handleClient(
+                        clientFd,
+                        sessionId,
+                        registry,
+                        telemetryStorage,
+                        logger,
+                        maxPendingBufferSize);
+
+                    finished->store(true);
+                }),
+            finished
+    });
     }
 
     logger.info("收到停止信号，服务器准备退出");
@@ -441,9 +536,9 @@ int main()
 
     //等待所有客户端线程
     logger.info("正在等待所有客户端线程结束");
-    for(std::thread& clientThread :clientThreads){
-        if(clientThread.joinable()){
-            clientThread.join();
+    for(ClientWorker& worker :ClientWorkers){
+        if(worker.thread.joinable()){
+            worker.thread.join();
         }
     }
     logger.info("所有客户端线程已经结束");

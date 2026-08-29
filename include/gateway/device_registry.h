@@ -15,6 +15,13 @@ enum class UpdateResult{
     ReplacedByNewerSession
 };
 
+struct DeviceSnapshot{
+    std::string deviceId;
+    std::unordered_map<std::string, double> values;
+    bool online = false;
+    std::uint64_t sessionId =0;
+};
+
 class DeviceRegistry{
 public:
     UpdateResult update(
@@ -28,6 +35,9 @@ public:
     void markTimedOut(
             std::chrono::seconds timeout);
 
+    bool getSnapshot(
+            const std::string& deviceId,
+            DeviceSnapshot& snapshot) const;
 private:
     struct DeviceStatus{
         std::string deviceId;
@@ -39,7 +49,7 @@ private:
     void printAllUnlocked()const;
 
     std::unordered_map<std::string,DeviceStatus> devices_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
 
 };
 

@@ -7,8 +7,22 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <cstddef>
+#include <vector>
 
 namespace storage{
+
+//数据库中一条完整的遥测记录
+struct TelemetryRecord{
+    std::int64_t id{};
+    std::string deviceId;
+    std::string deviceType;
+    double value{};
+    std::uint64_t sessionId{};
+    std::uint64_t createdAt{};
+};
+
+
 
 class SQLiteStorage{
     public:
@@ -28,6 +42,11 @@ class SQLiteStorage{
         bool saveTelemetry(
                 const protocol::DeviceData& data,
                 std::uint64_t sessionId);
+        //查询指定设备最近若干条数据
+        bool queryLatestTelemetry(
+                const std::string& deviceId,
+                std::size_t limit,
+                std::vector<TelemetryRecord>& records);
 
     private:
         //执行不需要返回查询结果的SQL

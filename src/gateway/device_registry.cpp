@@ -11,14 +11,15 @@ UpdateResult DeviceRegistry::update(
 {
     //锁的范围尽量小 
     std::lock_guard<std::mutex> lock(mutex_);
-    
+   
+    //引用查找指定设备的状态信息，更新状态
     DeviceStatus& status = 
         devices_[data.deviceId];
-    //设备已经被编号更大的新连接接管
+    //设备已经被编号更大的新连接接管 
     if(status.sessionId > sessionId){
         return UpdateResult::ReplacedByNewerSession;
     }
-    //首次连接，当前连接或新连接接管
+    //首次连接，当前连接或新连接接管,全部更新状态
     status.sessionId = sessionId;
     status.deviceId=data.deviceId;
     status.online = true;
@@ -70,6 +71,24 @@ void DeviceRegistry::markTimedOut(
     if(changed){
         printAllUnlocked();
     }
+}
+
+bool DeviceRegistry::getSnapshot(
+        const std::string& deviceId,
+        DeviceSnapshot& snapshot)const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = devices_.find(deviceId);
+    if(it == devices_.end()){
+        return false;
+    }
+
+    snapshot.deviceId = it->second.deviceId;
+    snapshot.values = it->second.values;
+    snapshot.online = it->second.online;
+    snapshot.sessionId = it->second.sessionId;
+
+    return true;
 }
 
 //打印所有设备，会话编号，状态，和测量数据
