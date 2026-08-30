@@ -18,6 +18,7 @@ find_package(SQLite3 REQUIRED)
 add_executable(
     gateway_server
     src/server.cpp
+    src/server/gateway_server.cpp
         )
 
 add_executable(
