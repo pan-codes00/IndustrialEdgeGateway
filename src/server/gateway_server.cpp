@@ -1,7 +1,6 @@
 #include "server/gateway_server.h"
 
 #include "common/socket_utils.h"
-#include "protocol/device_protocol.h"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -48,7 +47,8 @@ volatile std::sig_atomic_t GatewayServer::stopRequested_ = 0;
 GatewayServer::GatewayServer(config::GatewayConfig config)
     : config_(std::move(config)),
       logger_(config_.logPath),
-      telemetryStorage_(config_.databasePath)
+      telemetryStorage_(config_.databasePath),
+      messageProcessor_(registry_, telemetryStorage_, logger_)
 {
 }
 
@@ -321,16 +321,10 @@ void GatewayServer::handleClient(
                     "客户端消息缓存超过限制,sessionId=" +
                     std::to_string(sessionId));
 
-                const char reply[] = "FRAME_TOO_LARGE\n";
-                if (!net::sendAll(
-                        clientFd,
-                        reply,
-                        sizeof(reply) - 1)) {
-                    logger_.error(
-                        makeSystemErrorMessage("send") +
-                        ",sessionId=" +
-                        std::to_string(sessionId));
-                }
+                sendReply(
+                    clientFd,
+                    "FRAME_TOO_LARGE\n",
+                    sessionId);
                 break;
             }
 
@@ -342,113 +336,22 @@ void GatewayServer::handleClient(
 
                 pendingBuffer.erase(0, newlinePosition + 1);
 
-                protocol::DeviceData data;
-                if (!protocol::parseDeviceData(
+                const MessageProcessResult result =
+                    messageProcessor_.processCompleteMessage(
                         completeMessage,
-                        data)) {
-                    logger_.warning(
-                        "设备数据格式有误,sessionId=" +
-                        std::to_string(sessionId) +
-                        ",data:" +
-                        completeMessage);
+                        connectedDeviceId,
+                        sessionId);
 
-                    const char reply[] = "ERROR\n";
-                    if (!net::sendAll(
-                            clientFd,
-                            reply,
-                            sizeof(reply) - 1)) {
-                        logger_.error(
-                            makeSystemErrorMessage("send") +
-                            ",sessionId=" +
-                            std::to_string(sessionId));
-                        connectionActive = false;
-                        break;
-                    }
-                    continue;
-                }
-
-                if (connectedDeviceId.empty()) {
-                    connectedDeviceId = data.deviceId;
-                } else if (connectedDeviceId != data.deviceId) {
-                    logger_.warning(
-                        "同一连接尝试更换设备ID，sessionId=" +
-                        std::to_string(sessionId) +
-                        ",originalDeviceId=" +
-                        connectedDeviceId +
-                        ",newDeviceId=" +
-                        data.deviceId);
-
-                    const char reply[] = "ID_ERROR\n";
-                    if (!net::sendAll(
-                            clientFd,
-                            reply,
-                            sizeof(reply) - 1)) {
-                        logger_.error(
-                            makeSystemErrorMessage("send") +
-                            ",sessionId=" +
-                            std::to_string(sessionId));
-                        connectionActive = false;
-                        break;
-                    }
-                    continue;
-                }
-
-                const gateway::UpdateResult updateResult =
-                    registry_.update(data, sessionId);
-
-                if (updateResult ==
-                    gateway::UpdateResult::ReplacedByNewerSession) {
-                    logger_.warning(
-                        "旧会话退出，无法修改设备状态，sessionId=" +
-                        std::to_string(sessionId));
-
-                    const char reply[] = "SESSION_REPLACED\n";
-                    if (!net::sendAll(
-                            clientFd,
-                            reply,
-                            sizeof(reply) - 1)) {
-                        logger_.error(
-                            makeSystemErrorMessage("send") +
-                            ",sessionId=" +
-                            std::to_string(sessionId));
-                    }
+                if (!sendReply(
+                        clientFd,
+                        result.reply,
+                        sessionId)) {
                     connectionActive = false;
                     break;
                 }
 
-                if (!telemetryStorage_.saveTelemetry(
-                        data,
-                        sessionId)) {
-                    logger_.error(
-                        "设备数据保存失败,deviceId=" +
-                        data.deviceId +
-                        ",sessionId=" +
-                        std::to_string(sessionId));
-
-                    const char reply[] = "STORAGE_ERROR\n";
-                    if (!net::sendAll(
-                            clientFd,
-                            reply,
-                            sizeof(reply) - 1)) {
-                        logger_.error(
-                            makeSystemErrorMessage("send") +
-                            ",sessionId=" +
-                            std::to_string(sessionId));
-                        connectionActive = false;
-                        break;
-                    }
-                    continue;
-                }
-
-                const char reply[] = "OK\n";
-                if (!net::sendAll(
-                        clientFd,
-                        reply,
-                        sizeof(reply) - 1)) {
-                    logger_.error(
-                        makeSystemErrorMessage("send") +
-                        ",sessionId=" +
-                        std::to_string(sessionId));
+                if (result.action ==
+                    MessageAction::CloseConnection) {
                     connectionActive = false;
                     break;
                 }
@@ -488,6 +391,22 @@ void GatewayServer::handleClient(
         "客户端处理线程结束，sessionId=" +
         std::to_string(sessionId));
     close(clientFd);
+}
+
+bool GatewayServer::sendReply(
+    int clientFd,
+    std::string_view reply,
+    std::uint64_t sessionId)
+{
+    if (net::sendAll(clientFd, reply.data(), reply.size())) {
+        return true;
+    }
+
+    logger_.error(
+        makeSystemErrorMessage("send") +
+        ",sessionId=" +
+        std::to_string(sessionId));
+    return false;
 }
 
 void GatewayServer::monitorDeviceStatus()
