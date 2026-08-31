@@ -147,6 +147,11 @@ add_library(
     STATIC
     src/logging/logger.cpp
         )
+add_library(
+    gateway_message_processor
+    STATIC
+    src/server/device_message_processor.cpp
+        )
 target_include_directories(
     gateway_logging
     PUBLIC
@@ -154,6 +159,18 @@ target_include_directories(
     )
 target_compile_options(
     gateway_logging
+    PRIVATE
+    -Wall
+    -Wextra
+        -Wpedantic
+        )
+target_include_directories(
+    gateway_message_processor
+    PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+target_compile_options(
+    gateway_message_processor
     PRIVATE
     -Wall
     -Wextra
@@ -172,6 +189,7 @@ target_link_libraries(
     gateway_storage
     gateway_config
     gateway_logging
+    gateway_message_processor
     Threads::Threads
     )
 #客户端
@@ -198,6 +216,13 @@ target_link_libraries(
     gateway_query
     PRIVATE
     gateway_storage
+    )
+target_link_libraries(
+    gateway_message_processor
+    PUBLIC
+    gateway_core
+    gateway_storage
+    gateway_logging
     )
 
 #===============================================================
@@ -326,5 +351,31 @@ if(BUILD_TESTING)
     add_test(
         NAME socket_utils_tests
         COMMAND socket_utils_tests
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(
+        device_message_processor_tests
+        tests/device_message_processor_tests.cpp
+    )
+
+    target_compile_options(
+        device_message_processor_tests
+        PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+
+    target_link_libraries(
+        device_message_processor_tests
+        PRIVATE
+        gateway_message_processor
+    )
+
+    add_test(
+        NAME device_message_processor_tests
+        COMMAND device_message_processor_tests
     )
 endif()

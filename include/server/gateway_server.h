@@ -3,12 +3,14 @@
 #include "config/gateway_config.h"
 #include "gateway/device_registry.h"
 #include "logging/logger.h"
+#include "server/device_message_processor.h"
 #include "storage/sqlite_storage.h"
 
 #include <atomic>
 #include <csignal>
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -42,6 +44,10 @@ private:
     void acceptConnections();
     void startClientWorker(int clientFd, std::uint64_t sessionId);
     void handleClient(int clientFd, std::uint64_t sessionId);
+    bool sendReply(
+        int clientFd,
+        std::string_view reply,
+        std::uint64_t sessionId);
     void monitorDeviceStatus();
     void removeFinishedClientWorkers();
     void waitForClientWorkers();
@@ -52,6 +58,7 @@ private:
     logging::Logger logger_;
     storage::SQLiteStorage telemetryStorage_;
     gateway::DeviceRegistry registry_;
+    DeviceMessageProcessor messageProcessor_;
 
     int listenFd_{-1};
     std::uint64_t nextSessionId_{1};
